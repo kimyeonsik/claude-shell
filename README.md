@@ -10,6 +10,8 @@ A unified terminal shell that blends regular commands and Claude AI conversation
 - **4-Layer Context** — Memory, topics, conversation window, and shell state
 - **Token Efficient** — Command outputs are ephemeral; they don't consume your conversation window
 - **Persistent Daemon** — Background process keeps context alive across queries
+- **Conversation Continuity** — Sessions persist on disk; `continue: true` resumes where you left off
+- **Server-Side Caching** — System prompt (~20K tokens) cached at 0.1× price; only new message tokens charged in full
 
 ## Quick Start
 
@@ -83,7 +85,7 @@ ai --stop                         # Stop daemon
 │  - Claude Agent SDK integration   │
 │  - 4-layer context management     │
 │  - Memory extraction (Haiku)      │
-│  - Session resume                 │
+│  - continue: true session resume  │
 └──────────────────────────────────┘
 ```
 
@@ -97,6 +99,23 @@ ai --stop                         # Stop daemon
 | L3: Shell | Current shell state (cwd, recent commands) | ~100 tokens |
 
 Total budget: ~3100 tokens — enough for meaningful conversations while staying fast and cheap.
+
+### Session Continuity
+
+claude-shell uses the Agent SDK's `continue: true` option to resume the most recent Claude Code session for the current directory. Sessions are saved to disk (`~/.claude/projects/`) and survive daemon restarts.
+
+```
+Query 1 → fresh session created, claude_code preset (~20K tokens) cached
+Query 2 → continue: true → same session loaded from disk
+          input_tokens:       3   (only the new user message)
+          cache_read_tokens:  ~20,000  (at 0.1× price)
+```
+
+This means the large system prompt is only charged once (at 1.25× creation price), then served from cache on every subsequent query at 0.1× — roughly **78% cheaper** over a 10-turn conversation compared to sending the full context each time.
+
+Context resets (`--clear`, `--compact`, `--forget`, `--topic`) start a fresh session automatically.
+
+**Authentication**: OAuth via your Claude Code subscription — no API key required.
 
 ### Token Efficiency
 
