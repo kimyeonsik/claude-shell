@@ -72,9 +72,8 @@ async function handleQuery(
           preset: "claude_code",
           append: appendPrompt,
         },
-        resume: ctx.needsNewSession
-          ? undefined
-          : (currentSessionId ?? undefined),
+        // Agent SDK sessions are per-query; resume is not supported across calls
+        resume: undefined,
         // C1 fix: use allowedTools to auto-allow specific tools
         // C2 fix: use bypassPermissions so detached daemon doesn't hang on prompts
         allowedTools: ["Read", "Edit", "Bash", "Glob", "Grep", "Write"],
@@ -470,6 +469,9 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function start(): void {
+  // Allow Agent SDK to run even when launched from within a Claude Code session
+  delete process.env.CLAUDECODE;
+
   ensureConfigDir();
 
   // H4/H5 fix: Check for stale socket using PID file

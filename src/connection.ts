@@ -48,10 +48,14 @@ export function startDaemon(): Promise<void> {
   return new Promise((resolve, reject) => {
     const daemonPath = new URL("./daemon.js", import.meta.url).pathname;
 
+    // Strip CLAUDECODE env so daemon's Agent SDK doesn't reject as nested session
+    const env = { ...process.env };
+    delete env.CLAUDECODE;
+
     const child = spawn(process.execPath, [daemonPath], {
       detached: true,
       stdio: "ignore",
-      env: { ...process.env },
+      env,
     });
 
     child.unref();
