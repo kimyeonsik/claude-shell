@@ -72,8 +72,9 @@ async function handleQuery(
           preset: "claude_code",
           append: appendPrompt,
         },
-        // Agent SDK sessions are per-query; resume is not supported across calls
-        resume: undefined,
+        // continue: true picks up the most recent session in cwd (server-side cache)
+        // needsNewSession is true after --clear / --compact / --forget / --topic
+        ...(ctx.needsNewSession ? {} : { continue: true }),
         // C1 fix: use allowedTools to auto-allow specific tools
         // C2 fix: use bypassPermissions so detached daemon doesn't hang on prompts
         allowedTools: ["Read", "Edit", "Bash", "Glob", "Grep", "Write"],
