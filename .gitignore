@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.sock
+*.pid
+.DS_Store

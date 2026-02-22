@@ -1,0 +1,87 @@
+#!/bin/bash
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN_DIR="$HOME/.local/bin"
+SHARE_DIR="$HOME/.local/share/claude-shell"
+CONFIG_DIR="$HOME/.config/claude-shell"
+
+echo "── Installing Claude Shell (aish) ──"
+
+# 0. Check prerequisites
+if ! command -v node &>/dev/null; then
+  echo "Error: node not found. Install Node.js 18+ first." >&2
+  exit 1
+fi
+if ! command -v npm &>/dev/null; then
+  echo "Error: npm not found." >&2
+  exit 1
+fi
+
+# 1. Build TypeScript
+echo "→ Building..."
+cd "$SCRIPT_DIR"
+npm install --silent
+npm run build --silent
+
+# 2. Create directories
+mkdir -p "$BIN_DIR" "$SHARE_DIR" "$CONFIG_DIR"
+
+# 3. Copy dist and node_modules
+echo "→ Copying files..."
+cp -r "$SCRIPT_DIR/dist" "$SHARE_DIR/"
+cp -r "$SCRIPT_DIR/node_modules" "$SHARE_DIR/"
+cp -r "$SCRIPT_DIR/shell" "$SHARE_DIR/"
+cp "$SCRIPT_DIR/package.json" "$SHARE_DIR/"
+
+# 4. Create wrapper scripts
+cat > "$BIN_DIR/aish-daemon" << WRAPPER
+#!/bin/bash
+cd "$SHARE_DIR"
+exec node "$SHARE_DIR/dist/daemon.js" "\$@"
+WRAPPER
+chmod +x "$BIN_DIR/aish-daemon"
+
+cat > "$BIN_DIR/aish-client" << WRAPPER
+#!/bin/bash
+cd "$SHARE_DIR"
+exec node "$SHARE_DIR/dist/client.js" "\$@"
+WRAPPER
+chmod +x "$BIN_DIR/aish-client"
+
+cat > "$BIN_DIR/aish" << WRAPPER
+#!/bin/bash
+cd "$SHARE_DIR"
+exec node "$SHARE_DIR/dist/client.js" "\$@"
+WRAPPER
+chmod +x "$BIN_DIR/aish"
+
+# 5. Add to zsh if not already present
+ZSHRC="$HOME/.zshrc"
+MARKER="# claude-shell (aish)"
+SOURCE_LINE="source $SHARE_DIR/shell/ai.zsh"
+
+if ! grep -q "$MARKER" "$ZSHRC" 2>/dev/null; then
+  echo "" >> "$ZSHRC"
+  echo "$MARKER" >> "$ZSHRC"
+  echo "$SOURCE_LINE" >> "$ZSHRC"
+  echo "→ Added to .zshrc"
+else
+  echo "→ Already in .zshrc"
+fi
+
+# 6. Ensure ~/.local/bin is in PATH
+if ! echo "$PATH" | grep -q "$BIN_DIR"; then
+  echo ""
+  echo "⚠  Add to your PATH if not already:"
+  echo "   export PATH=\"\$HOME/.local/bin:\$PATH\""
+fi
+
+echo ""
+echo "✓ Installed! Restart your shell or run:"
+echo "  source ~/.zshrc"
+echo ""
+echo "Usage:"
+echo "  ai hello                    # Talk to Claude"
+echo "  ai --status                 # Check context"
+echo "  ai --help                   # All commands"

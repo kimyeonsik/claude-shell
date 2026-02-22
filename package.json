@@ -1,0 +1,27 @@
+{
+  "name": "claude-shell",
+  "version": "0.1.0",
+  "description": "Unified terminal + AI tool powered by Claude Agent SDK",
+  "type": "module",
+  "bin": {
+    "aish-daemon": "./dist/daemon.js",
+    "aish-client": "./dist/client.js",
+    "aish": "./dist/client.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start:daemon": "node dist/daemon.js",
+    "start:client": "node dist/client.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.50"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
