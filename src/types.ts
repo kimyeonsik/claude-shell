@@ -71,6 +71,7 @@ export const SOCKET_PATH = `${CONFIG_DIR}/daemon.sock`;
 export const MEMORY_PATH = `${CONFIG_DIR}/memory.json`;
 export const TOPICS_PATH = `${CONFIG_DIR}/topics.json`;
 export const SHELL_STATE_PATH = `${CONFIG_DIR}/shell-state.json`;
+export const LANG_PATH = `${CONFIG_DIR}/lang`;
 
 export const MAX_TOPICS = 10;
 export const MEMORY_EXTRACT_INTERVAL = 5;

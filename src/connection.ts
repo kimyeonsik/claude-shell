@@ -10,6 +10,7 @@ import {
   parseBuffer,
 } from "./protocol.js";
 import { SOCKET_PATH, CONFIG_DIR } from "./types.js";
+import { t, loadLang } from "./i18n.js";
 
 const PID_PATH = `${CONFIG_DIR}/daemon.pid`;
 
@@ -76,9 +77,10 @@ export function startDaemon(): Promise<void> {
 
 export async function ensureDaemon(): Promise<void> {
   if (!isDaemonRunning()) {
-    process.stderr.write(dim("Starting daemon...\n"));
+    loadLang();
+    process.stderr.write(dim(t("conn_starting_daemon") + "\n"));
     await startDaemon();
-    process.stderr.write(dim("Daemon ready.\n"));
+    process.stderr.write(dim(t("conn_daemon_ready") + "\n"));
   }
 }
 

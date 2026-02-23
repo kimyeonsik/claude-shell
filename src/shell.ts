@@ -15,6 +15,7 @@ import {
   sendMessage,
   streamResponses,
 } from "./connection.js";
+import { t, loadLang, setLang } from "./i18n.js";
 
 // ── ANSI colors ──
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -58,6 +59,7 @@ export class AishShell {
   }
 
   async start(): Promise<void> {
+    loadLang();
     // Ensure daemon is ready before entering REPL
     try {
       await ensureDaemon();
@@ -382,7 +384,7 @@ export class AishShell {
   private async handleCommandNotFound(input: string): Promise<void> {
     if (this.looksLikeNaturalLanguage(input)) {
       // Clearly natural language → forward to AI silently
-      process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+      process.stdout.write(dim(t("shell_forwarding_to_ai")));
       await this.handleAIQuery(input);
       return;
     }
@@ -392,24 +394,24 @@ export class AishShell {
     if (corrected) {
       const destructive = this.isDestructiveCommand(corrected);
       if (destructive) {
-        process.stdout.write(red("  ⚠  되돌릴 수 없는 명령입니다!\n"));
+        process.stdout.write(red(t("shell_irreversible_warning")));
       }
       const cmdDisplay = destructive ? red(bold(corrected)) : bold(corrected);
       const answer = await this.promptLine(
-        dim("  혹시 ") + cmdDisplay + dim("인가요? [Y=실행 / n=취소 / a=AI] ")
+        dim(t("shell_did_you_mean")) + cmdDisplay + dim(t("shell_did_you_mean_suffix"))
       );
       process.stdout.write("\n");
 
       const choice = answer.trim().toLowerCase();
       if (choice === "a") {
         // Send original input to AI
-        process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+        process.stdout.write(dim(t("shell_forwarding_to_ai")));
         await this.handleAIQuery(input);
       } else if (choice !== "n") {
         // Y or Enter → run corrected command
         const exitCode = await this.handleShellCommand(corrected);
         if (exitCode === 127) {
-          process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+          process.stdout.write(dim(t("shell_forwarding_to_ai")));
           await this.handleAIQuery(input);
         }
       }
@@ -418,7 +420,7 @@ export class AishShell {
     }
 
     // No close match → ask whether to send to AI
-    const answer = await this.promptLine(dim("  AI에게 보낼까요? [Y/n] "));
+    const answer = await this.promptLine(dim(t("shell_send_to_ai")));
     process.stdout.write("\n");
 
     if (answer.trim().toLowerCase() !== "n") {
@@ -635,6 +637,14 @@ export class AishShell {
       return;
     }
 
+    if (flag === "--lang") {
+      const lang = parts[1];
+      if (!lang) { console.error(red("✗"), "Usage: --lang <en|ko>"); return; }
+      const r = setLang(lang);
+      process.stderr.write((r.ok ? green("✓ ") : red("✗ ")) + r.message + "\n");
+      return;
+    }
+
     const command = commandMap[flag] ?? argCommandMap[flag];
     if (!command) {
       console.error(red("✗"), `Unknown command: ${flag}`);
@@ -755,11 +765,11 @@ export class AishShell {
   // ── Status Display ──
   private printStatus(data: Record<string, unknown>): void {
     const s = data as Record<string, number | string | null>;
-    console.log(bold("── aish status ──"));
+    console.log(bold(t("status_header")));
     console.log(
       `Memory: ${cyan(String(s.memoryTokens ?? 0) + "t")} | ` +
       `Topics: ${cyan(String(s.topicCount ?? 0) + " (" + String(s.topicTokens ?? 0) + "t)")} | ` +
-      `Window: ${cyan(String(s.windowTurns ?? 0) + "턴 (" + String(s.windowTokens ?? 0) + "t)")}`
+      `Window: ${cyan(String(s.windowTurns ?? 0) + t("status_turns_unit") + " (" + String(s.windowTokens ?? 0) + "t)")}`
     );
     console.log(
       `Budget: ${yellow(String(s.totalTokens ?? 0) + " / " + String(s.budget ?? 3100))} tokens | ` +
@@ -769,34 +779,35 @@ export class AishShell {
 
   // ── Welcome ──
   private printWelcome(): void {
-    console.log(bold("aish") + dim(" — Interactive Shell + AI"));
-    console.log(dim("Commands: > AI query | cmd |> AI pipe | --status | --help | exit"));
+    console.log(bold("aish") + dim(t("welcome_subtitle")));
+    console.log(dim(t("welcome_hint")));
     console.log("");
   }
 
   // ── Help ──
   private printHelp(): void {
-    console.log(bold("── aish Interactive Shell ──"));
+    console.log(bold(t("help_header")));
     console.log("");
-    console.log("Shell Commands:");
-    console.log(`  ${cyan("ls -la")}                 Run any shell command`);
-    console.log(`  ${cyan("cd ~/project")}           Change directory`);
+    console.log(t("help_shell_section"));
+    console.log(`  ${cyan("ls -la")}                 ${t("help_run_command")}`);
+    console.log(`  ${cyan("cd ~/project")}           ${t("help_change_dir")}`);
     console.log("");
-    console.log("AI Commands:");
-    console.log(`  ${cyan("> question")}             AI에게 질문 (최근 출력이 자동 컨텍스트)`);
-    console.log(`  ${cyan("cmd |> question")}        명령 결과를 AI에 파이프`);
+    console.log(t("help_ai_section"));
+    console.log(`  ${cyan("> question")}             ${t("help_ai_query")}`);
+    console.log(`  ${cyan("cmd |> question")}        ${t("help_ai_pipe")}`);
     console.log("");
-    console.log("Daemon Commands:");
-    console.log(`  ${cyan("--status")}               컨텍스트 상태`);
-    console.log(`  ${cyan("--compact")}              윈도우 요약`);
-    console.log(`  ${cyan("--clear")}                윈도우 초기화`);
-    console.log(`  ${cyan("--forget")}               전체 초기화`);
-    console.log(`  ${cyan('--topic "name"')}         주제 전환`);
-    console.log(`  ${cyan('--recall "name"')}        주제 복원`);
-    console.log(`  ${cyan('--remember "fact"')}      메모리 저장`);
-    console.log(`  ${cyan("--stop")}                 데몬 종료`);
+    console.log(t("help_daemon_section"));
+    console.log(`  ${cyan("--status")}               ${t("help_status")}`);
+    console.log(`  ${cyan("--compact")}              ${t("help_compact")}`);
+    console.log(`  ${cyan("--clear")}                ${t("help_clear")}`);
+    console.log(`  ${cyan("--forget")}               ${t("help_forget")}`);
+    console.log(`  ${cyan('--topic "name"')}         ${t("help_topic")}`);
+    console.log(`  ${cyan('--recall "name"')}        ${t("help_recall")}`);
+    console.log(`  ${cyan('--remember "fact"')}      ${t("help_remember")}`);
+    console.log(`  ${cyan("--lang <en|ko>")}         ${t("help_lang")}`);
+    console.log(`  ${cyan("--stop")}                 ${t("help_stop")}`);
     console.log("");
-    console.log(`  ${cyan("exit")}                   Shell 종료`);
+    console.log(`  ${cyan("exit")}                   ${t("help_exit")}`);
   }
 }
 

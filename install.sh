@@ -27,6 +27,23 @@ npm run build --silent
 # 2. Create directories
 mkdir -p "$BIN_DIR" "$SHARE_DIR" "$CONFIG_DIR"
 
+if [ -t 0 ]; then
+  echo ""
+  echo "Select language / 언어를 선택하세요:"
+  echo "  [1] English (default)"
+  echo "  [2] 한국어 (Korean)"
+  printf "Choice [1/2]: "
+  read -r LANG_CHOICE || LANG_CHOICE="1"
+else
+  LANG_CHOICE="1"
+fi
+case "$LANG_CHOICE" in
+  2|ko) SELECTED_LANG="ko" ;;
+  *)    SELECTED_LANG="en" ;;
+esac
+echo "$SELECTED_LANG" > "$CONFIG_DIR/lang"
+echo "→ Language: $SELECTED_LANG"
+
 # 3. Copy dist and node_modules
 echo "→ Copying files..."
 cp -r "$SCRIPT_DIR/dist" "$SHARE_DIR/"

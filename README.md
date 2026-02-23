@@ -2,6 +2,12 @@
 
 A unified terminal shell that blends regular commands and Claude AI conversations in a single REPL. Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk).
 
+[English](#english) · [한국어](#한국어)
+
+---
+
+<a name="english"></a>
+
 ## Features
 
 - **Interactive REPL** — Run terminal commands and talk to Claude in one place
@@ -15,6 +21,7 @@ A unified terminal shell that blends regular commands and Claude AI conversation
 - **Conversation Continuity** — Sessions persist on disk; `continue: true` resumes where you left off
 - **Server-Side Caching** — System prompt (~20K tokens) cached at 0.1x price; ~78% cheaper over a conversation
 - **One-Shot Mode** — `ai "question"` or `cmd | ai "question"` from any zsh prompt
+- **i18n** — English and Korean UI, switchable at any time with `--lang`
 
 ## Quick Start
 
@@ -24,6 +31,8 @@ cd claude-shell
 ./install.sh
 source ~/.zshrc
 ```
+
+The installer prompts you to choose a language (English or Korean) during setup.
 
 **Prerequisites**: Node.js 18+, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed
 
@@ -54,6 +63,21 @@ ai "explain this project"         # Single query
 git diff | ai "review this"       # Pipe stdin to AI
 ai 이게 왜 안 되나요?              # Korean/non-ASCII auto-forwarded (noglob applied)
 ```
+
+### Language
+
+```bash
+aish --lang ko                    # Switch to Korean
+aish --lang en                    # Switch to English
+```
+
+Or from within the interactive shell:
+
+```
+aish ~/project $ --lang ko
+```
+
+The chosen language is saved to `~/.config/claude-shell/lang` and persists across sessions.
 
 ### Context Management
 
@@ -94,11 +118,22 @@ When a command exits with code 127 (not found), aish applies a multi-step fallba
 **Unknown command** — if no close match found, asks `[Y/n]` to forward to AI.
 
 ```
+# English (default)
+aish ~/project $ gti status
+  Did you mean git status? [Y=run / n=cancel / a=AI]
+
+# Korean (--lang ko)
 aish ~/project $ gti status
   혹시 git status인가요? [Y=실행 / n=취소 / a=AI]
 ```
 
 ```
+# English
+aish ~/project $ rm -rdf /tmp/test
+  ⚠  Irreversible command!
+  Did you mean rm -rdf /tmp/test? [Y=run / n=cancel / a=AI]
+
+# Korean
 aish ~/project $ rm -rdf /tmp/test
   ⚠  되돌릴 수 없는 명령입니다!
   혹시 rm -rdf /tmp/test인가요? [Y=실행 / n=취소 / a=AI]
@@ -208,6 +243,11 @@ src/
 ├── connection.ts     # Shared daemon connection utilities
 ├── protocol.ts       # IPC message types (JSON over Unix socket)
 ├── types.ts          # Shared types and constants
+├── i18n.ts           # i18n singleton (loadLang / setLang / t)
+├── locales/
+│   ├── en.ts         # English strings (source of truth + Translations type)
+│   ├── ko.ts         # Korean strings
+│   └── index.ts      # Re-exports + SUPPORTED_LANGS / Lang type
 └── context/
     ├── manager.ts    # Context orchestration
     ├── memory.ts     # Persistent memory (L0)
@@ -227,5 +267,164 @@ shell/
 ```
 
 ## License
+
+MIT
+
+---
+
+<a name="한국어"></a>
+
+# Claude Shell (aish) — 한국어
+
+일반 터미널 명령어와 Claude AI 대화를 하나의 REPL에서 사용할 수 있는 통합 셸입니다. [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk) 기반으로 동작합니다.
+
+## 주요 기능
+
+- **대화형 REPL** — 터미널 명령어와 Claude 대화를 한 곳에서
+- **AI 질문 접두어** — `> 질문` 으로 셸 내에서 Claude에게 질문
+- **AI 파이프** — `명령어 |> 질문` 으로 명령 출력을 AI에 전달
+- **스마트 명령어 미인식 처리** — QWERTY 가중 편집 거리 오타 교정, 자연어는 AI에 자동 전달
+- **출력 링 버퍼** — 최근 명령어 출력 5개(최대 3000자)가 AI 컨텍스트로 자동 제공
+- **4계층 컨텍스트** — 영구 메모리, 주제 요약, 대화 윈도우, 실시간 셸 상태
+- **토큰 효율** — 명령 출력은 임시 처리(대화 윈도우 토큰 미소비)
+- **영구 데몬** — 백그라운드 Unix 소켓 서버가 쿼리 간 컨텍스트 유지
+- **대화 연속성** — 세션을 디스크에 저장, `continue: true`로 이어서 진행
+- **서버 측 캐싱** — 시스템 프롬프트(~20K 토큰)를 0.1x 가격으로 캐시, 대화당 ~78% 절약
+- **원샷 모드** — zsh 프롬프트 어디서든 `ai "질문"` 또는 `명령어 | ai "질문"`
+- **다국어(i18n)** — 영어/한국어 UI, `--lang`으로 언제든 전환
+
+## 빠른 시작
+
+```bash
+git clone https://github.com/cosmicbuffalo/claude-shell.git
+cd claude-shell
+./install.sh
+source ~/.zshrc
+```
+
+설치 시 언어를 선택할 수 있습니다(영어/한국어). 설치 후에도 `--lang`으로 변경 가능합니다.
+
+**필수 조건**: Node.js 18+, [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 설치
+
+## 사용법
+
+### 대화형 셸 (aish)
+
+```bash
+aish                              # 대화형 REPL 진입
+```
+
+셸 내부 사용:
+
+```
+aish ~/project $ ls -la                    # 셸 명령어 실행
+aish ~/project $ > 이 출력 설명해줘        # AI에게 질문 (최근 출력 자동 포함)
+aish ~/project $ git diff |> 리뷰해줘      # 명령 출력을 AI에 파이프
+aish ~/project $ cd src                    # 디렉토리 이동
+aish ~/project $ --status                  # 컨텍스트 상태 확인
+aish ~/project $ --help                    # 도움말
+aish ~/project $ exit                      # 종료
+```
+
+### 언어 전환
+
+```bash
+aish --lang ko          # 한국어로 전환
+aish --lang en          # 영어로 전환
+```
+
+셸 내부에서도 전환 가능:
+
+```
+aish ~/project $ --lang en
+```
+
+선택한 언어는 `~/.config/claude-shell/lang`에 저장되어 세션 간 유지됩니다.
+
+### 원샷 모드
+
+```bash
+ai "이 프로젝트 설명해줘"          # 단일 쿼리
+git diff | ai "이거 리뷰해줘"      # stdin을 AI에 파이프
+ai 이게 왜 안 되나요?              # 한국어/비ASCII는 자동 AI 전달 (noglob 적용)
+```
+
+### 컨텍스트 관리
+
+같은 플래그를 `aish`(앞에 `--` 추가)와 `ai` 명령어 양쪽에서 사용할 수 있습니다:
+
+```bash
+ai --status                         # 컨텍스트 예산 및 토큰 사용량 확인
+ai --compact                        # 대화 윈도우를 주제 요약으로 압축
+ai --clear                          # 대화 윈도우 초기화 (메모리 유지)
+ai --forget                         # 전체 초기화 (메모리 + 주제 + 윈도우)
+ai --topic "auth 작업"              # 주제 전환 (현재 주제 저장)
+ai --recall "auth 작업"             # 저장된 주제 복원
+ai --remember "PostgreSQL 사용중"   # 영구 메모리에 사실 저장
+```
+
+### 데몬 제어
+
+```bash
+ai --start                          # 데몬 수동 시작
+ai --stop                           # 데몬 종료
+```
+
+## 스마트 명령어 미인식 처리
+
+명령어가 127 코드로 종료(명령어 없음)되면 aish는 단계별 폴백을 적용합니다:
+
+**자연어 감지** — AI에 자동 전달:
+- 비ASCII 입력(한국어, 일본어 등)
+- `?`로 끝나는 입력
+- 5개 이상의 단어
+- 일반 영어 자연어 동사로 시작 (`explain`, `how`, `what` 등)
+
+**오타 교정** — QWERTY 가중 레벤슈타인 거리로 PATH에서 유사 명령어 탐색:
+- QWERTY 인접 키 비용 0.5 (그 외 치환은 1.0)
+- 세 가지 선택지 제공: `[Y=실행 / n=취소 / a=AI]`
+- 파괴적 명령어(`rm -rf`, `dd`, `mkfs` 등)는 빨간 경고 표시
+
+**알 수 없는 명령어** — 유사 명령어 없으면 `[Y/n]`으로 AI 전달 여부 확인
+
+```
+aish ~/project $ gti status
+  혹시 git status인가요? [Y=실행 / n=취소 / a=AI]
+```
+
+```
+aish ~/project $ rm -rdf /tmp/test
+  ⚠  되돌릴 수 없는 명령입니다!
+  혹시 rm -rdf /tmp/test인가요? [Y=실행 / n=취소 / a=AI]
+```
+
+## 아키텍처
+
+### 4계층 컨텍스트 시스템
+
+| 계층 | 역할 | 예산 |
+|------|------|------|
+| L0: Memory | 영구 사실 (프로젝트 정보, 컨벤션, 결정) | ~200 토큰 |
+| L1: Topics | 과거 대화 요약 (이름 붙인 주제) | ~300 토큰 |
+| L2: Window | 최근 대화 턴 | ~2500 토큰 |
+| L3: Shell | 현재 cwd + 최근 명령어 이력 | ~100 토큰 |
+
+총 예산: ~3100 토큰 — 빠르고 저렴하게 유지하면서 의미 있는 대화 가능.
+
+### 세션 연속성
+
+aish는 Agent SDK의 `continue: true` 옵션으로 현재 디렉토리의 가장 최근 Claude Code 세션을 재개합니다. 세션은 디스크(`~/.claude/projects/`)에 저장되며 데몬 재시작 후에도 유지됩니다.
+
+대규모 시스템 프롬프트는 최초 1회 과금(1.25x 생성 가격) 후 이후 쿼리에서 캐시로 제공(0.1x) — 10턴 대화 기준 약 **78% 절약**.
+
+**인증**: Claude Code 구독의 OAuth 사용 — API 키 불필요.
+
+## 제거
+
+```bash
+./uninstall.sh
+```
+
+## 라이선스
 
 MIT

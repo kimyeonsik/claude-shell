@@ -12,6 +12,7 @@ import {
   sendMessage,
   streamResponses,
 } from "./connection.js";
+import { t, loadLang, setLang } from "./i18n.js";
 
 // ── ANSI colors ──
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -82,6 +83,7 @@ function parseArgs(argv: string[]): {
     "--topic": "topic",
     "--recall": "recall",
     "--remember": "remember",
+    "--lang": "lang",
   };
 
   if (first in argCommandMap) {
@@ -151,11 +153,11 @@ function handleDaemonMessage(
 
 function printStatus(data: Record<string, unknown>): void {
   const s = data as Record<string, number | string | null>;
-  console.log(bold("── aish status ──"));
+  console.log(bold(t("status_header")));
   console.log(
     `Memory: ${cyan(String(s.memoryTokens ?? 0) + "t")} | ` +
     `Topics: ${cyan(String(s.topicCount ?? 0) + " (" + String(s.topicTokens ?? 0) + "t)")} | ` +
-    `Window: ${cyan(String(s.windowTurns ?? 0) + "턴 (" + String(s.windowTokens ?? 0) + "t)")}`
+    `Window: ${cyan(String(s.windowTurns ?? 0) + t("status_turns_unit") + " (" + String(s.windowTokens ?? 0) + "t)")}`
   );
   console.log(
     `Budget: ${yellow(String(s.totalTokens ?? 0) + " / " + String(s.budget ?? 3100))} tokens | ` +
@@ -164,29 +166,39 @@ function printStatus(data: Record<string, unknown>): void {
 }
 
 function printHelp(): void {
-  console.log(bold("aish — Claude Shell"));
+  console.log(bold(t("client_help_title")));
   console.log("");
-  console.log("Usage:");
-  console.log(`  ${cyan("aish [message]")}             AI에게 메시지 (one-shot)`);
-  console.log(`  ${cyan("aish")}                       Interactive Shell 진입`);
-  console.log(`  ${cyan("aish --status")}              컨텍스트 상태`);
-  console.log(`  ${cyan("aish --compact")}             윈도우 강제 요약`);
-  console.log(`  ${cyan("aish --clear")}               윈도우 초기화 (Memory 유지)`);
-  console.log(`  ${cyan("aish --forget")}              전체 초기화`);
-  console.log(`  ${cyan('aish --topic "name"')}        주제 전환`);
-  console.log(`  ${cyan('aish --recall "name"')}       이전 주제 복원`);
-  console.log(`  ${cyan('aish --remember "fact"')}     메모리에 저장`);
-  console.log(`  ${cyan("aish --start")}               daemon 시작`);
-  console.log(`  ${cyan("aish --stop")}                daemon 종료`);
+  console.log(t("client_help_usage"));
+  console.log(`  ${cyan("aish [message]")}             ${t("client_oneshot")}`);
+  console.log(`  ${cyan("aish")}                       ${t("client_interactive")}`);
+  console.log(`  ${cyan("aish --status")}              ${t("client_status")}`);
+  console.log(`  ${cyan("aish --compact")}             ${t("client_compact")}`);
+  console.log(`  ${cyan("aish --clear")}               ${t("client_clear")}`);
+  console.log(`  ${cyan("aish --forget")}              ${t("client_forget")}`);
+  console.log(`  ${cyan('aish --topic "name"')}        ${t("client_topic")}`);
+  console.log(`  ${cyan('aish --recall "name"')}       ${t("client_recall")}`);
+  console.log(`  ${cyan('aish --remember "fact"')}     ${t("client_remember")}`);
+  console.log(`  ${cyan("aish --start")}               ${t("client_start")}`);
+  console.log(`  ${cyan("aish --stop")}                ${t("client_stop")}`);
+  console.log(`  ${cyan("aish --lang <en|ko>")}        ${t("client_lang")}`);
 }
 
 // ── Main ──
 async function main(): Promise<void> {
+  loadLang();
   const { command, commandArg, message } = parseArgs(process.argv);
 
   // Help
   if (command === "help") {
     printHelp();
+    return;
+  }
+
+  // Language change
+  if (command === "lang") {
+    const r = setLang(commandArg ?? "");
+    process.stdout.write((r.ok ? green("✓ ") : red("✗ ")) + r.message + "\n");
+    if (!r.ok) process.exit(1);
     return;
   }
 
