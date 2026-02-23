@@ -1,12 +1,26 @@
 # TESTING.md — aish Test Scenarios
 
+## Automated Test Script
+
+```bash
+# 빠른 실행 (AI 질의 제외, ~5초)
+bash scripts/test.sh --fast
+
+# 전체 실행 (AI 질의 포함, ~30초)
+bash scripts/test.sh
+```
+
+`scripts/test.sh`는 아래 시나리오 표의 모든 항목을 자동으로 검증합니다.
+
+---
+
 ## Legend
 
 | Symbol | Meaning |
 |--------|---------|
-| ✅ | Already verified (automated) |
-| 🖥️ | Requires interactive terminal |
-| ⚠️ | Known limitation (document, don't fix) |
+| ✅ | Automated (scripts/test.sh) |
+| 🖥️ | Requires interactive terminal (Ctrl+C 등) |
+| ⚠️ | Known limitation |
 
 ---
 
@@ -178,84 +192,24 @@
 
 ## 6. Interactive REPL 테스트 방법
 
-stdin pipe로는 readline async 특성상 정확한 테스트가 불가합니다.
-아래 방법으로 직접 실행해주세요.
+### 6.1 자동화 (scripts/test.sh) — 권장
 
-### 6.1 수동 테스트 (권장)
+커맨드 큐 + isClosing 플래그 구현으로 piped 입력이 실제 인터랙티브와 동일하게 동작합니다.
+3.1~3.6, 4.x 섹션 전체를 `printf "cmd\n" | aish` 패턴으로 자동 검증합니다.
 
 ```bash
-# 새 터미널에서:
+bash scripts/test.sh --fast   # ~5초
+bash scripts/test.sh          # ~30초 (AI 포함)
+```
+
+### 6.2 수동 테스트 (Ctrl+C 시나리오)
+
+3.7 Ctrl+C 시나리오는 시그널이라 파이프로 전송 불가 — 직접 실행 필요:
+
+```bash
 aish
+# 터미널에서 직접:
+# 1. sleep 10 입력 후 Ctrl+C → 명령 취소, REPL 복귀 확인
+# 2. > 질문 입력 후 AI 응답 중 Ctrl+C → 쿼리 취소, REPL 복귀 확인
+# 3. 대기 중 Ctrl+C → 현재 줄 클리어, 새 프롬프트 확인
 ```
-
-3.x 섹션 시나리오를 순서대로 실행.
-
-### 6.2 tmux를 이용한 자동화 테스트
-
-```bash
-# 세션 시작
-tmux new-session -d -s aish-test
-
-# 명령 전송
-tmux send-keys -t aish-test "aish" Enter
-sleep 1
-
-# 결과 확인
-tmux capture-pane -pt aish-test
-
-# 명령 실행 테스트
-tmux send-keys -t aish-test "ls" Enter
-sleep 0.5
-tmux capture-pane -pt aish-test
-
-# AI 쿼리 테스트
-tmux send-keys -t aish-test "> 이 프로젝트가 뭐야?" Enter
-sleep 5
-tmux capture-pane -pt aish-test
-
-# 종료
-tmux send-keys -t aish-test "exit" Enter
-tmux kill-session -t aish-test
-```
-
-### 6.3 코드 수정으로 근본 해결 (readline async queue)
-
-현재 readline "line" 이벤트는 async handler를 기다리지 않아 piped 입력 시 명령이 동시에 실행됩니다.
-`shell.ts`에 커맨드 큐를 추가하면 이 문제가 해결됩니다:
-
-```typescript
-// shell.ts에 추가
-private cmdQueue: Array<() => Promise<void>> = [];
-private isProcessing = false;
-
-private enqueue(fn: () => Promise<void>): void {
-  this.cmdQueue.push(fn);
-  if (!this.isProcessing) this.processQueue();
-}
-
-private async processQueue(): Promise<void> {
-  this.isProcessing = true;
-  while (this.cmdQueue.length > 0) {
-    const fn = this.cmdQueue.shift()!;
-    await fn();
-    this.rl!.setPrompt(this.buildPrompt());
-    this.rl!.prompt();
-  }
-  this.isProcessing = false;
-}
-
-// "line" 이벤트 핸들러를 아래처럼 교체:
-this.rl.on("line", (line) => {
-  const input = line.trim();
-  if (!input) { this.rl!.prompt(); return; }
-  this.enqueue(async () => {
-    try {
-      await this.dispatch(input);
-    } catch (err) {
-      console.error(red("✗"), err instanceof Error ? err.message : String(err));
-    }
-  });
-});
-```
-
-이렇게 하면 `printf "ls\nexit\n" | aish` 같은 파이프 테스트도 정확하게 동작합니다.
