@@ -28,8 +28,9 @@ const magenta = (s: string) => `\x1b[35m${s}\x1b[0m`;
 
 // ── Constants ──
 const MAX_OUTPUT_ENTRIES = 5;
-const MAX_OUTPUT_CHARS = 3000;
-const MAX_CONTEXT_CHARS = 4000;
+const MAX_OUTPUT_CHARS  = 20_000;
+const MAX_CONTEXT_CHARS = 16_000;
+const NOTIFY_THRESHOLD_MS = 10_000;
 
 // ── Types ──
 interface OutputEntry {
@@ -37,6 +38,56 @@ interface OutputEntry {
   output: string;
   exitCode: number;
   ts: number;
+}
+
+// ── OS Notification ──
+function notify(command: string, exitCode: number, ms: number): void {
+  const esc = (s: string) => s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const icon  = exitCode === 0 ? "✓" : "✗";
+  const label = command.trim().split(/\s+/)[0].slice(0, 40);
+  const sec   = (ms / 1000).toFixed(1);
+  const title = esc(`aish — ${icon} ${label}`);
+  const body  = esc(exitCode === 0 ? `Done (${sec}s)` : `Failed [${exitCode}] (${sec}s)`);
+
+  if (process.platform === "darwin") {
+    spawn("osascript", ["-e",
+      `display notification "${body}" with title "${title}"`,
+    ], { stdio: "ignore" }).unref();
+  } else if (process.platform === "linux") {
+    spawn("notify-send", ["--expire-time=4000", title, body],
+      { stdio: "ignore" }).unref();
+  }
+}
+
+// ── Output Compression ──
+function compressOutput(raw: string, limit: number): string {
+  // Step 1: ANSI 이스케이프 코드 제거 — 무손실, 항상 적용
+  let s = raw.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "")
+             .replace(/\x1b\][^\x07]*\x07/g, ""); // OSC sequences
+
+  // Step 2: 연속 중복 라인 압축 — 무손실, 항상 적용 (프로그레스 바, "......" 등)
+  const lines = s.split("\n");
+  const deduped: string[] = [];
+  let repeatCount = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (i + 1 < lines.length && lines[i] === lines[i + 1]) {
+      repeatCount++;
+    } else {
+      deduped.push(repeatCount > 0 ? `${lines[i]} (×${repeatCount + 1})` : lines[i]);
+      repeatCount = 0;
+    }
+  }
+  s = deduped.join("\n");
+
+  if (s.length <= limit) return s;
+
+  // Step 3: head(30%) + tail(70%) 윈도우 — 에러/결과는 항상 끝에 있음
+  const headBudget = Math.floor(limit * 0.30);
+  const tailBudget = limit - headBudget - 40; // 40: 구분선 여유
+  const head = s.slice(0, headBudget);
+  const tail = s.slice(s.length - tailBudget);
+  const omitted = s.length - headBudget - tailBudget;
+  return `${head}\n... [약 ${omitted}자 생략] ...\n${tail}`;
 }
 
 // ── AishShell Class ──
@@ -200,6 +251,19 @@ export class AishShell {
       return;
     }
 
+    // Natural language → skip shell entirely (no "command not found" noise)
+    if (this.looksLikeNaturalLanguage(input)) {
+      process.stdout.write(dim(t("shell_forwarding_to_ai")));
+      await this.handleAIQuery(input);
+      return;
+    }
+
+    // Command not in PATH / not a shell builtin → skip sh -c, go to not-found handler
+    if (!this.shouldTryShell(input)) {
+      await this.handleCommandNotFound(input);
+      return;
+    }
+
     // Regular shell command — try as shell first, fallback to AI on 127
     const exitCode = await this.handleShellCommand(input);
     if (exitCode === 127) {
@@ -210,6 +274,7 @@ export class AishShell {
   // ── Shell Command Execution ──
   private handleShellCommand(command: string): Promise<number> {
     return new Promise((resolveCmd) => {
+      const startMs = Date.now();
       let output = "";
 
       const child = spawn("sh", ["-c", command], {
@@ -223,28 +288,31 @@ export class AishShell {
       child.stdout!.on("data", (data: Buffer) => {
         const chunk = data.toString();
         process.stdout.write(chunk);
-        if (output.length < MAX_OUTPUT_CHARS) output += chunk;
+        output += chunk;
       });
 
       child.stderr!.on("data", (data: Buffer) => {
         const chunk = data.toString();
         process.stderr.write(chunk);
-        if (output.length < MAX_OUTPUT_CHARS) output += chunk;
+        output += chunk;
       });
 
       child.on("close", (code) => {
         this.activeChild = null;
         const exitCode = code ?? 0;
+        const elapsed = Date.now() - startMs;
 
-        // Store in ring buffer
+        // Store in ring buffer (compress if over limit)
         this.pushOutput({
           command,
-          output: output.length > MAX_OUTPUT_CHARS
-            ? output.slice(0, MAX_OUTPUT_CHARS) + "\n...[truncated]"
-            : output,
+          output: compressOutput(output, MAX_OUTPUT_CHARS),
           exitCode,
           ts: Date.now(),
         });
+
+        if (elapsed >= NOTIFY_THRESHOLD_MS) {
+          notify(command, exitCode, elapsed);
+        }
 
         resolveCmd(exitCode);
       });
@@ -280,7 +348,19 @@ export class AishShell {
   };
 
   // Weighted Levenshtein: adjacent-key substitution costs 0.5, others cost 1.0
+  // + single adjacent transposition (e.g. "gti"→"git") costs 1.0
   private editDistance(a: string, b: string): number {
+    // Fast path: single adjacent transposition (same length, two chars swapped)
+    if (a.length === b.length) {
+      let diffs = 0, first = -1;
+      for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) { if (diffs++ === 0) first = i; if (diffs > 2) break; }
+      }
+      if (diffs === 2 && a[first] === b[first + 1] && a[first + 1] === b[first]) {
+        return 1;
+      }
+    }
+
     const subCost = (x: string, y: string): number => {
       if (x === y) return 0;
       const xl = x.toLowerCase(), yl = y.toLowerCase();
@@ -299,6 +379,29 @@ export class AishShell {
       prev = curr;
     }
     return prev[b.length];
+  }
+
+  // Shell builtins / keywords that won't appear in PATH
+  private static readonly SHELL_BUILTINS = new Set([
+    "if", "then", "else", "elif", "fi",
+    "for", "while", "until", "do", "done",
+    "case", "esac", "function",
+    "export", "unset", "set", "declare", "local", "typeset", "readonly",
+    "source", ".", "exec", "eval", "read",
+    "alias", "unalias", "[", "[[",
+  ]);
+
+  // Returns true if the input should be tried as a shell command.
+  // Avoids running sh -c on things that will obviously fail with 127.
+  private shouldTryShell(input: string): boolean {
+    const first = input.trim().split(/\s+/)[0];
+    if (!first) return false;
+    if (AishShell.SHELL_BUILTINS.has(first)) return true;
+    // env-var prefix: LANG=en cmd  or  VAR=value
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(first)) return true;
+    // subshell or brace group
+    if (first.startsWith("(") || first.startsWith("{")) return true;
+    return this.getPathCommands().includes(first);
   }
 
   // Destructive command patterns — warn before running
@@ -483,11 +586,7 @@ export class AishShell {
     const output = await this.execSilent(cmd);
 
     // Use this specific output as context (not the general buffer)
-    const truncated = output.length > MAX_CONTEXT_CHARS
-      ? output.slice(0, MAX_CONTEXT_CHARS) + "\n...[truncated]"
-      : output;
-
-    const commandContext = `$ ${cmd}\n${truncated}`;
+    const commandContext = `$ ${cmd}\n${compressOutput(output, MAX_CONTEXT_CHARS)}`;
     await this.sendToAI(queryText, commandContext);
   }
 
@@ -505,16 +604,16 @@ export class AishShell {
       this.activeChild = child;
 
       child.stdout!.on("data", (data: Buffer) => {
-        if (output.length < MAX_OUTPUT_CHARS) output += data.toString();
+        output += data.toString();
       });
 
       child.stderr!.on("data", (data: Buffer) => {
-        if (output.length < MAX_OUTPUT_CHARS) output += data.toString();
+        output += data.toString();
       });
 
       child.on("close", () => {
         this.activeChild = null;
-        resolveCmd(output);
+        resolveCmd(compressOutput(output, MAX_OUTPUT_CHARS));
       });
 
       child.on("error", (err) => {

@@ -93,10 +93,28 @@ if ! echo "$PATH" | grep -q "$BIN_DIR"; then
 fi
 
 echo ""
-echo "✓ Installed! Restart your shell or run:"
-echo "  source ~/.zshrc"
+echo "✓ Installed!"
 echo ""
 echo "Usage:"
-echo "  ai hello                    # Talk to Claude"
-echo "  ai --status                 # Check context"
-echo "  ai --help                   # All commands"
+echo "  ai hello                    # One-shot: Talk to Claude"
+echo "  ai --status                 # One-shot: Check context"
+echo "  ai --help                   # One-shot: All commands"
+echo ""
+echo "  aish                        # Interactive shell (shell + AI integrated)"
+echo "  aish $ > why does this fail # Ask AI inside interactive shell"
+echo "  aish $ npm test |> explain  # Pipe command output to AI"
+echo ""
+
+# 7. Activate in current shell
+AI_ZSH="$SHARE_DIR/shell/ai.zsh"
+if [[ -n "$ZSH_VERSION" ]]; then
+  # Script is being sourced from zsh — activate immediately
+  # shellcheck disable=SC1090
+  source "$AI_ZSH"
+  echo "✓ Activated in current shell. Try: ai --help"
+else
+  # Running as a bash subprocess — cannot affect parent shell
+  echo "→ Activate in your current shell:"
+  echo "   source ~/.zshrc"
+  echo "   (or open a new terminal)"
+fi
