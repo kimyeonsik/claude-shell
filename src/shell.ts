@@ -46,6 +46,9 @@ export class AishShell {
   private activeChild: ChildProcess | null = null;
   private activeSocket: Socket | null = null;
   private isQuerying = false;
+  private cmdQueue: Array<() => Promise<void>> = [];
+  private isProcessing = false;
+  private isClosing = false;
 
   constructor(initialCwd?: string) {
     this.cwd = initialCwd ?? process.cwd();
@@ -95,30 +98,57 @@ export class AishShell {
       }
     });
 
-    this.rl.on("line", async (line) => {
+    this.rl.on("line", (line) => {
       const input = line.trim();
       if (!input) {
         this.rl!.prompt();
         return;
       }
 
-      try {
-        await this.dispatch(input);
-      } catch (err) {
-        console.error(red("✗"), err instanceof Error ? err.message : String(err));
-      }
-
-      // Update prompt (cwd may have changed)
-      this.rl!.setPrompt(this.buildPrompt());
-      this.rl!.prompt();
+      this.enqueue(async () => {
+        try {
+          await this.dispatch(input);
+        } catch (err) {
+          console.error(red("✗"), err instanceof Error ? err.message : String(err));
+        }
+      });
     });
 
     this.rl.on("close", () => {
-      process.stdout.write(dim("\nBye.\n"));
-      process.exit(0);
+      if (this.isClosing) return;       // already handled (e.g. "exit" command)
+      this.isClosing = true;
+      if (!this.isProcessing) {
+        // Queue is empty — exit immediately (e.g. Ctrl+D with no pending commands)
+        process.stdout.write(dim("\nBye.\n"));
+        process.exit(0);
+      }
+      // Queue still running — processQueue will print Bye. and exit when done
     });
 
     this.rl.prompt();
+  }
+
+  // ── Command Queue (ensures sequential execution) ──
+  private enqueue(fn: () => Promise<void>): void {
+    this.cmdQueue.push(fn);
+    if (!this.isProcessing) this.processQueue();
+  }
+
+  private async processQueue(): Promise<void> {
+    this.isProcessing = true;
+    while (this.cmdQueue.length > 0) {
+      const fn = this.cmdQueue.shift()!;
+      await fn();
+      if (!this.isClosing) {
+        this.rl!.setPrompt(this.buildPrompt());
+        this.rl!.prompt();
+      }
+    }
+    this.isProcessing = false;
+    if (this.isClosing) {
+      process.stdout.write(dim("\nBye.\n"));
+      process.exit(0);
+    }
   }
 
   // ── Command Dispatch ──
