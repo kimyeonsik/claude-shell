@@ -81,7 +81,6 @@ async function handleQuery(
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         abortController: abort,
-        maxTurns: 3,
         includePartialMessages: false,
         cwd,
       },

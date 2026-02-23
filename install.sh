@@ -44,14 +44,12 @@ chmod +x "$BIN_DIR/aish-daemon"
 
 cat > "$BIN_DIR/aish-client" << WRAPPER
 #!/bin/bash
-cd "$SHARE_DIR"
 exec node "$SHARE_DIR/dist/client.js" "\$@"
 WRAPPER
 chmod +x "$BIN_DIR/aish-client"
 
 cat > "$BIN_DIR/aish" << WRAPPER
 #!/bin/bash
-cd "$SHARE_DIR"
 exec node "$SHARE_DIR/dist/client.js" "\$@"
 WRAPPER
 chmod +x "$BIN_DIR/aish"

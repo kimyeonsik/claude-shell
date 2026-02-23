@@ -4,7 +4,7 @@
 
 import * as readline from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, statSync, readdirSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { type Socket } from "node:net";
@@ -49,6 +49,9 @@ export class AishShell {
   private cmdQueue: Array<() => Promise<void>> = [];
   private isProcessing = false;
   private isClosing = false;
+  private pendingInputResolve: ((s: string) => void) | null = null;
+  private pathCommandsCache: string[] | null = null;
+  private pathCommandsCacheTime = 0;
 
   constructor(initialCwd?: string) {
     this.cwd = initialCwd ?? process.cwd();
@@ -100,8 +103,17 @@ export class AishShell {
 
     this.rl.on("line", (line) => {
       const input = line.trim();
+
+      // If handleCommandNotFound is waiting for confirmation, route there
+      if (this.pendingInputResolve) {
+        const resolve = this.pendingInputResolve;
+        this.pendingInputResolve = null;
+        resolve(input);
+        return;
+      }
+
       if (!input) {
-        this.rl!.prompt();
+        if (!this.isProcessing) this.rl!.prompt();
         return;
       }
 
@@ -186,12 +198,15 @@ export class AishShell {
       return;
     }
 
-    // Regular shell command
-    await this.handleShellCommand(input);
+    // Regular shell command — try as shell first, fallback to AI on 127
+    const exitCode = await this.handleShellCommand(input);
+    if (exitCode === 127) {
+      await this.handleCommandNotFound(input);
+    }
   }
 
   // ── Shell Command Execution ──
-  private handleShellCommand(command: string): Promise<void> {
+  private handleShellCommand(command: string): Promise<number> {
     return new Promise((resolveCmd) => {
       let output = "";
 
@@ -206,13 +221,13 @@ export class AishShell {
       child.stdout!.on("data", (data: Buffer) => {
         const chunk = data.toString();
         process.stdout.write(chunk);
-        output += chunk;
+        if (output.length < MAX_OUTPUT_CHARS) output += chunk;
       });
 
       child.stderr!.on("data", (data: Buffer) => {
         const chunk = data.toString();
         process.stderr.write(chunk);
-        output += chunk;
+        if (output.length < MAX_OUTPUT_CHARS) output += chunk;
       });
 
       child.on("close", (code) => {
@@ -229,15 +244,186 @@ export class AishShell {
           ts: Date.now(),
         });
 
-        resolveCmd();
+        resolveCmd(exitCode);
       });
 
       child.on("error", (err) => {
         this.activeChild = null;
         console.error(red("✗"), err.message);
-        resolveCmd();
+        resolveCmd(1);
       });
     });
+  }
+
+  // ── Command-not-found Fallback ──
+
+  // Prompt user for a single line within the queue (safe alternative to rl.question)
+  private async promptLine(question: string): Promise<string> {
+    if (this.isClosing) return "";
+    return new Promise<string>((resolve) => {
+      this.pendingInputResolve = resolve;
+      process.stdout.write(question);
+    });
+  }
+
+  // QWERTY keyboard adjacency map (lowercase only)
+  // Adjacent = same row neighbor + diagonal cross-row neighbor
+  private static readonly QWERTY: Record<string, string> = {
+    q:"was",   w:"qeasd",  e:"wrsdf",  r:"etdfg",  t:"ryfgh",
+    y:"tughj",  u:"yihjk",  i:"uojkl",  o:"ipkl",   p:"ol",
+    a:"qwsz",  s:"aedxzw", d:"srfxce", f:"dgtcvr",  g:"fhtvby",
+    h:"gjybun", j:"hkuinm", k:"jlijom", l:"kop",
+    z:"asx",   x:"zsdc",   c:"xvdf",   v:"cbfg",    b:"vngh",
+    n:"bmhj",  m:"njk",
+  };
+
+  // Weighted Levenshtein: adjacent-key substitution costs 0.5, others cost 1.0
+  private editDistance(a: string, b: string): number {
+    const subCost = (x: string, y: string): number => {
+      if (x === y) return 0;
+      const xl = x.toLowerCase(), yl = y.toLowerCase();
+      return AishShell.QWERTY[xl]?.includes(yl) ? 0.5 : 1;
+    };
+
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const curr = [i];
+      for (let j = 1; j <= b.length; j++) {
+        const cost = subCost(a[i - 1], b[j - 1]);
+        curr[j] = cost === 0
+          ? prev[j - 1]
+          : Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+      }
+      prev = curr;
+    }
+    return prev[b.length];
+  }
+
+  // Destructive command patterns — warn before running
+  private static readonly DESTRUCTIVE = [
+    /^rm\s+.*-[a-z]*r/i,   // rm -r, rm -rf, rm -Rf …
+    /^rm\s+-[a-z]*f/i,     // rm -f
+    /^dd\b/,               // dd
+    /^mkfs\b/,             // mkfs
+    /^shred\b/,            // shred
+    /^truncate\b/,         // truncate
+    /^wipefs\b/,           // wipefs
+  ];
+
+  private isDestructiveCommand(cmd: string): boolean {
+    return AishShell.DESTRUCTIVE.some(r => r.test(cmd.trim()));
+  }
+
+  // Get all executable commands from PATH (cached 60s)
+  private getPathCommands(): string[] {
+    const now = Date.now();
+    if (this.pathCommandsCache && now - this.pathCommandsCacheTime < 60_000) {
+      return this.pathCommandsCache;
+    }
+    const cmds = new Set<string>();
+    for (const dir of (process.env.PATH ?? "").split(":")) {
+      try {
+        for (const f of readdirSync(dir)) cmds.add(f);
+      } catch { /* skip non-existent dirs */ }
+    }
+    this.pathCommandsCache = [...cmds];
+    this.pathCommandsCacheTime = now;
+    return this.pathCommandsCache;
+  }
+
+  // Find the closest command in PATH using weighted edit distance.
+  // Adjacent-key typos (QWERTY) cost 0.5, so two keyboard-neighbor errors = dist 1.0.
+  // Returns the corrected full command string, or null if no close match.
+  private findSimilarCommand(input: string): string | null {
+    const cmdName = input.trim().split(/\s+/)[0];
+    if (!cmdName || cmdName.length < 2) return null;
+
+    // Weighted max distance: same integers as before, but now adjacent-key
+    // errors count as 0.5 — effectively catching twice as many keyboard typos.
+    const maxDist = cmdName.length <= 3 ? 1 : cmdName.length <= 6 ? 2 : 3;
+
+    let bestCmd: string | null = null;
+    let bestDist = Infinity;
+
+    for (const cmd of this.getPathCommands()) {
+      // Quick length filter (use integer ceiling of maxDist)
+      if (Math.abs(cmd.length - cmdName.length) > maxDist) continue;
+      if (cmd === cmdName) continue;
+
+      const d = this.editDistance(cmdName, cmd);
+      if (d === 0 || d > maxDist) continue;
+
+      // Prefer: (1) smaller weighted distance, (2) shorter cmd, (3) lex order
+      if (d < bestDist || (d === bestDist && cmd.length < (bestCmd?.length ?? Infinity))) {
+        bestDist = d;
+        bestCmd = cmd;
+      }
+    }
+
+    if (!bestCmd) return null;
+
+    const rest = input.trim().slice(cmdName.length);
+    return bestCmd + rest;
+  }
+
+  // Heuristic: does input look like natural language rather than a shell command?
+  private looksLikeNaturalLanguage(input: string): boolean {
+    // Non-ASCII (Korean, Japanese, etc.) → definitely NL
+    if (/[^\x00-\x7F]/.test(input)) return true;
+    // Ends with question mark
+    if (input.trimEnd().endsWith("?")) return true;
+    // 5+ words → sentence-like
+    if (input.trim().split(/\s+/).length >= 5) return true;
+    // Starts with common English NL verbs/question words
+    if (/^(what|why|how|when|where|who|explain|describe|tell|show|is|are|does|do|can|could|would|please)\b/i.test(input)) return true;
+    return false;
+  }
+
+  private async handleCommandNotFound(input: string): Promise<void> {
+    if (this.looksLikeNaturalLanguage(input)) {
+      // Clearly natural language → forward to AI silently
+      process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+      await this.handleAIQuery(input);
+      return;
+    }
+
+    // Try spell correction first
+    const corrected = this.findSimilarCommand(input);
+    if (corrected) {
+      const destructive = this.isDestructiveCommand(corrected);
+      if (destructive) {
+        process.stdout.write(red("  ⚠  되돌릴 수 없는 명령입니다!\n"));
+      }
+      const cmdDisplay = destructive ? red(bold(corrected)) : bold(corrected);
+      const answer = await this.promptLine(
+        dim("  혹시 ") + cmdDisplay + dim("인가요? [Y=실행 / n=취소 / a=AI] ")
+      );
+      process.stdout.write("\n");
+
+      const choice = answer.trim().toLowerCase();
+      if (choice === "a") {
+        // Send original input to AI
+        process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+        await this.handleAIQuery(input);
+      } else if (choice !== "n") {
+        // Y or Enter → run corrected command
+        const exitCode = await this.handleShellCommand(corrected);
+        if (exitCode === 127) {
+          process.stdout.write(dim("  → AI에게 전달합니다.\n"));
+          await this.handleAIQuery(input);
+        }
+      }
+      // n → cancel silently
+      return;
+    }
+
+    // No close match → ask whether to send to AI
+    const answer = await this.promptLine(dim("  AI에게 보낼까요? [Y/n] "));
+    process.stdout.write("\n");
+
+    if (answer.trim().toLowerCase() !== "n") {
+      await this.handleAIQuery(input);
+    }
   }
 
   // ── cd Handling ──
@@ -317,11 +503,11 @@ export class AishShell {
       this.activeChild = child;
 
       child.stdout!.on("data", (data: Buffer) => {
-        output += data.toString();
+        if (output.length < MAX_OUTPUT_CHARS) output += data.toString();
       });
 
       child.stderr!.on("data", (data: Buffer) => {
-        output += data.toString();
+        if (output.length < MAX_OUTPUT_CHARS) output += data.toString();
       });
 
       child.on("close", () => {
@@ -357,6 +543,8 @@ export class AishShell {
 
     return new Promise((resolveQuery) => {
       const socket = connectToDaemon();
+      socket.setTimeout(10000);
+      socket.on("timeout", () => socket.destroy(new Error("Daemon timed out")));
       this.activeSocket = socket;
 
       socket.on("connect", () => {
@@ -424,7 +612,8 @@ export class AishShell {
   private async handleMetaCommand(input: string): Promise<void> {
     const parts = input.split(/\s+/);
     const flag = parts[0];
-    const args = parts.slice(1).join(" ");
+    const raw = parts.slice(1).join(" ");
+    const args = raw.replace(/^["'](.*)["']$/, "$1");
 
     const commandMap: Record<string, string> = {
       "--status": "status",
@@ -486,6 +675,8 @@ export class AishShell {
 
     return new Promise((resolveCmd) => {
       const socket = connectToDaemon();
+      socket.setTimeout(10000);
+      socket.on("timeout", () => socket.destroy(new Error("Daemon timed out")));
 
       socket.on("connect", () => {
         sendMessage(socket, {
