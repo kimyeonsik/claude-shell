@@ -79,7 +79,8 @@ add-zsh-hook precmd _aish_precmd
 _AISH_SCRIPT_DIR="${${(%):-%x}:A:h}"
 
 # ── ai command ──
-ai() {
+# _ai_impl: actual implementation (receives pre-noglob'd args)
+_ai_impl() {
   if [[ ! -x "$AISH_CLIENT" ]]; then
     # Fallback: try node directly using source-time path
     local dist_client="$(dirname "$_AISH_SCRIPT_DIR")/dist/client.js"
@@ -94,6 +95,11 @@ ai() {
 
   "$AISH_CLIENT" "$@"
 }
+
+# noglob prevents zsh from expanding ?, *, [] in the message before
+# passing it to _ai_impl.  Without this, `ai 안되나?` triggers
+# "zsh: no matches found: 안되나?"
+alias ai='noglob _ai_impl'
 
 # ── Pipe support: capture last command output ──
 # Usage: some_command | ai "explain this"
