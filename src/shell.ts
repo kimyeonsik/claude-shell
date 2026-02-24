@@ -90,6 +90,130 @@ function compressOutput(raw: string, limit: number): string {
   return `${head}\n... [약 ${omitted}자 생략] ...\n${tail}`;
 }
 
+// ── Spinner (AI 처리 중 애니메이션) ──
+class Spinner {
+  private timer: ReturnType<typeof setInterval> | null = null;
+  private startMs = 0;
+  private readonly frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+  private idx = 0;
+  private label = "";
+  active = false;
+
+  start(label: string): void {
+    this.clear();
+    this.label = label;
+    this.startMs = Date.now();
+    this.active = true;
+    this.idx = 0;
+    this.render();
+    this.timer = setInterval(() => this.render(), 80);
+  }
+
+  private render(): void {
+    const sec = ((Date.now() - this.startMs) / 1000).toFixed(1);
+    const frame = this.frames[this.idx++ % this.frames.length];
+    process.stdout.write(`\r\x1b[2K${magenta(frame)} ${this.label} ${dim(`(${sec}s)`)}`);
+  }
+
+  clear(): void {
+    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    this.active = false;
+    process.stdout.write("\r\x1b[2K");
+  }
+}
+
+// ── Tool 입력 미리보기 포맷 ──
+function formatToolInput(tool: string, inputJson: string): string {
+  try {
+    const obj = JSON.parse(inputJson) as Record<string, unknown>;
+    switch (tool) {
+      case "Bash":  return String(obj.command ?? "").split("\n")[0].slice(0, 60);
+      case "Read":  return String(obj.file_path ?? "");
+      case "Write": return String(obj.file_path ?? "");
+      case "Edit":  return String(obj.file_path ?? "");
+      case "Grep":  return `"${String(obj.pattern ?? "").slice(0, 30)}" ${String(obj.path ?? "")}`.trim();
+      case "Glob":  return String(obj.pattern ?? "");
+      default:      return inputJson.slice(0, 60).replace(/\n/g, " ");
+    }
+  } catch {
+    return inputJson.slice(0, 60).replace(/\n/g, " ");
+  }
+}
+
+// ── Markdown Renderer (터미널 출력용, 외부 패키지 없음) ──
+function inlineMd(text: string): string {
+  // 인라인 코드를 먼저 처리 (이후 패턴과 간섭 방지)
+  text = text.replace(/`([^`]+?)`/g, (_, t) => `\x1b[7m ${t} \x1b[27m`);
+  // Bold: **text** 또는 __text__
+  text = text.replace(/\*\*(.+?)\*\*/g, (_, t) => bold(t));
+  text = text.replace(/__(.+?)__/g, (_, t) => bold(t));
+  // Italic: *text* (단어 경계 주의 — *args 같은 패턴 오인식 방지)
+  text = text.replace(/(?<![a-zA-Z0-9])\*([^*\n]+?)\*(?![a-zA-Z0-9])/g, (_, t) => `\x1b[3m${t}\x1b[23m`);
+  // Italic: _text_ (snake_case 오인식 방지)
+  text = text.replace(/(?<![a-zA-Z0-9_])_([^_\n]+?)_(?![a-zA-Z0-9_])/g, (_, t) => `\x1b[3m${t}\x1b[23m`);
+  return text;
+}
+
+function renderMarkdown(md: string): string {
+  const lines = md.split("\n");
+  const out: string[] = [];
+  let inCode = false;
+  let codeLang = "";
+  let codeLines: string[] = [];
+
+  const flushCode = () => {
+    if (codeLang) out.push(dim(`  ${codeLang}`));
+    for (const l of codeLines) out.push(`  ${dim("│")} ${yellow(l)}`);
+    out.push("");
+    codeLines = [];
+    codeLang = "";
+  };
+
+  for (const line of lines) {
+    // ── 코드 펜스 ──
+    if (/^```/.test(line)) {
+      if (!inCode) {
+        inCode = true;
+        codeLang = line.slice(3).trim();
+      } else {
+        inCode = false;
+        flushCode();
+      }
+      continue;
+    }
+    if (inCode) { codeLines.push(line); continue; }
+
+    // ── 헤더 ──
+    const m1 = line.match(/^# (.+)/);
+    if (m1) { out.push(""); out.push(bold(cyan(m1[1]))); out.push(""); continue; }
+    const m2 = line.match(/^## (.+)/);
+    if (m2) { out.push(bold(m2[1])); continue; }
+    const m3 = line.match(/^### (.+)/);
+    if (m3) { out.push(bold(m3[1])); continue; }
+
+    // ── 수평선 ──
+    if (/^[-*_]{3,}\s*$/.test(line)) { out.push(dim("─".repeat(48))); continue; }
+
+    // ── 인용구 ──
+    if (line.startsWith("> ")) { out.push(dim("│ ") + inlineMd(line.slice(2))); continue; }
+
+    // ── 순서 없는 목록 ──
+    const mb = line.match(/^(\s*)[*\-+] (.+)/);
+    if (mb) { out.push(`${mb[1]}${cyan("•")} ${inlineMd(mb[2])}`); continue; }
+
+    // ── 순서 있는 목록 ──
+    const mn = line.match(/^(\s*)(\d+)\. (.+)/);
+    if (mn) { out.push(`${mn[1]}${cyan(`${mn[2]}.`)} ${inlineMd(mn[3])}`); continue; }
+
+    out.push(inlineMd(line));
+  }
+
+  // 닫히지 않은 코드 블록 처리
+  if (inCode && codeLines.length > 0) flushCode();
+
+  return out.join("\n");
+}
+
 // ── AishShell Class ──
 export class AishShell {
   private cwd: string;
@@ -103,6 +227,7 @@ export class AishShell {
   private isClosing = false;
   private pendingInputResolve: ((s: string) => void) | null = null;
   private pathCommandsCache: string[] | null = null;
+  private spinner = new Spinner();
   private pathCommandsCacheTime = 0;
 
   constructor(initialCwd?: string) {
@@ -142,13 +267,18 @@ export class AishShell {
         this.rl!.prompt();
       } else if (this.activeSocket) {
         // Cancel AI query
+        this.spinner.clear();
         this.activeSocket.destroy();
         this.activeSocket = null;
         this.isQuerying = false;
         process.stdout.write(dim("\n(query cancelled)\n"));
         this.rl!.prompt();
+      } else if (this.rl!.line === "") {
+        // 빈 입력에서 Ctrl+C → 종료
+        process.stdout.write(dim("\nBye.\n"));
+        process.exit(0);
       } else {
-        // Clear current line
+        // 타이핑 중 Ctrl+C → 현재 줄만 취소
         process.stdout.write("\n");
         this.rl!.prompt();
       }
@@ -644,11 +774,13 @@ export class AishShell {
 
     return new Promise((resolveQuery) => {
       const socket = connectToDaemon();
-      socket.setTimeout(10000);
-      socket.on("timeout", () => socket.destroy(new Error("Daemon timed out")));
+      // 초기 연결 타임아웃 5초 — 연결 후엔 해제 (AI 응답은 수십 초 걸릴 수 있음)
+      socket.setTimeout(5000);
+      socket.on("timeout", () => socket.destroy(new Error("Daemon connection timed out")));
       this.activeSocket = socket;
 
       socket.on("connect", () => {
+        socket.setTimeout(0); // 연결 성공 → 타임아웃 비활성화
         sendMessage(socket, {
           type: "query",
           message: queryText,
@@ -657,44 +789,61 @@ export class AishShell {
         });
       });
 
-      process.stdout.write(magenta("ai> "));
+      const spinner = this.spinner;
+      spinner.start(dim("AI thinking…"));
+      let textBuffer = "";
 
       streamResponses(socket, (msg: DaemonMessage) => {
         switch (msg.type) {
           case "text":
-            process.stdout.write(msg.content);
+            // 텍스트는 버퍼에만 모음 — done 시 일괄 렌더링
+            textBuffer += msg.content;
             break;
 
-          case "tool_use":
-            process.stderr.write(
-              dim(`  [${msg.tool}] `) + dim(msg.input.slice(0, 100)) + "\n"
+          case "tool_use": {
+            spinner.clear();
+            const preview = formatToolInput(msg.tool, msg.input);
+            process.stdout.write(
+              `${magenta("⏺")} ${bold(msg.tool)}${dim("(")}${dim(preview)}${dim(")")}\n`
             );
+            spinner.start(dim("running tool…"));
             break;
+          }
 
           case "tool_result":
-            process.stderr.write(dim("  → done\n"));
+            spinner.clear();
+            spinner.start(dim("AI thinking…"));
             break;
 
           case "status":
+            spinner.clear();
             this.printStatus(msg.data);
             break;
 
           case "info":
+            spinner.clear();
             process.stderr.write(green("✓ ") + msg.message + "\n");
             break;
 
           case "error":
+            spinner.clear();
             process.stderr.write(red("✗ ") + msg.message + "\n");
             break;
 
           case "done":
-            process.stdout.write("\n");
+            spinner.clear();
+            if (textBuffer.trim()) {
+              process.stdout.write(magenta("ai>") + "\n");
+              process.stdout.write(renderMarkdown(textBuffer.trim()));
+              process.stdout.write("\n");
+            }
             this.activeSocket = null;
             this.isQuerying = false;
             resolveQuery();
             break;
         }
       }).catch(() => {
+        spinner.clear();
         this.activeSocket = null;
         this.isQuerying = false;
         resolveQuery();
